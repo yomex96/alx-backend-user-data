@@ -1,88 +1,126 @@
 #!/usr/bin/env python3
-"""Basic authentication module for the API.
+""" Module of Users views
 """
-import re
-import base64
-import binascii
-from typing import Tuple, TypeVar
-
-from .auth import Auth
+from api.v1.views import app_views
+from flask import abort, jsonify, request
 from models.user import User
 
 
-class BasicAuth(Auth):
-    """Basic authentication class.
+@app_views.route('/users', methods=['GET'], strict_slashes=False)
+def view_all_users() -> str:
+    """ GET /api/v1/users
+    Return:
+      - list of all User objects JSON represented
     """
-    def extract_base64_authorization_header(
-            self,
-            authorization_header: str) -> str:
-        """Extracts the Base64 part of the Authorization header
-        for a Basic Authentication.
-        """
-        if type(authorization_header) == str:
-            pattern = r'Basic (?P<token>.+)'
-            field_match = re.fullmatch(pattern, authorization_header.strip())
-            if field_match is not None:
-                return field_match.group('token')
-        return None
+    all_users = [user.to_json() for user in User.all()]
+    return jsonify(all_users)
 
-    def decode_base64_authorization_header(
-            self,
-            base64_authorization_header: str,
-            ) -> str:
-        """Decodes a base64-encoded authorization header.
-        """
-        if type(base64_authorization_header) == str:
-            try:
-                res = base64.b64decode(
-                    base64_authorization_header,
-                    validate=True,
-                )
-                return res.decode('utf-8')
-            except (binascii.Error, UnicodeDecodeError):
-                return None
 
-    def extract_user_credentials(
-            self,
-            decoded_base64_authorization_header: str,
-            ) -> Tuple[str, str]:
-        """Extracts user credentials from a base64-decoded authorization
-        header that uses the Basic authentication flow.
-        """
-        if type(decoded_base64_authorization_header) == str:
-            pattern = r'(?P<user>[^:]+):(?P<password>.+)'
-            field_match = re.fullmatch(
-                pattern,
-                decoded_base64_authorization_header.strip(),
-            )
-            if field_match is not None:
-                user = field_match.group('user')
-                password = field_match.group('password')
-                return user, password
-        return None, None
+@app_views.route('/users/<user_id>', methods=['GET'], strict_slashes=False)
+def view_one_user(user_id: str = None) -> str:
+    """ GET /api/v1/users/:id
+    Path parameter:
+      - User ID
+    Return:
+      - User object JSON represented
+      - 404 if the User ID doesn't exist
+    """
+    if not user_id:
+        abort(404)
+    if user_id == "me":
+        if request.current_user is None:
+            abort(404)
+        return jsonify((User.get(request.current_user.id)).to_json())
+    user = User.get(user_id)
+    if user is None:
+        abort(404)
+    return jsonify(user.to_json())
 
-    def user_object_from_credentials(
-            self,
-            user_email: str,
-            user_pwd: str) -> TypeVar('User'):
-        """Retrieves a user based on the user's authentication credentials.
-        """
-        if type(user_email) == str and type(user_pwd) == str:
-            try:
-                users = User.search({'email': user_email})
-            except Exception:
-                return None
-            if len(users) <= 0:
-                return None
-            if users[0].is_valid_password(user_pwd):
-                return users[0]
-        return None
 
-    def current_user(self, request=None) -> TypeVar('User'):
-        """Retrieves the user from a request.
-        """
-        auth_header = self.authorization_header(request)
-        b64_auth_token = self.extract_base64_authorization_header(auth_header)
-        auth_token = self.decode_base64_authorization_header(b64_auth_token)
-        email, password = self.extract_user_credentials(auth_token)
-        return self.user_object_from_credentials(email, password)
+@app_views.route('/users/<user_id>', methods=['DELETE'], strict_slashes=False)
+def delete_user(user_id: str = None) -> str:
+    """ DELETE /api/v1/users/:id
+    Path parameter:
+      - User ID
+    Return:
+      - empty JSON is the User has been correctly deleted
+      - 404 if the User ID doesn't exist
+    """
+    if user_id is None:
+        abort(404)
+    user = User.get(user_id)
+    if user is None:
+        abort(404)
+    user.remove()
+    return jsonify({}), 200
+
+
+@app_views.route('/users', methods=['POST'], strict_slashes=False)
+def create_user() -> str:
+    """ POST /api/v1/users/
+    JSON body:
+      - email
+      - password
+      - last_name (optional)
+      - first_name (optional)
+    Return:
+      - User object JSON represented
+      - 400 if can't create the new User
+    """
+    rj = None
+    error_msg = None
+    try:
+        rj = request.get_json()
+    except Exception as e:
+        rj = None
+    if rj is None:
+        error_msg = "Wrong format"
+    if error_msg is None and rj.get("email", "") == "":
+        error_msg = "email missing"
+    if error_msg is None and rj.get("password", "") == "":
+        error_msg = "password missing"
+    if error_msg is None:
+        try:
+            user = User()
+            user.email = rj.get("email")
+            user.password = rj.get("password")
+            user.first_name = rj.get("first_name")
+            user.last_name = rj.get("last_name")
+            user.save()
+            return jsonify(user.to_json()), 201
+        except Exception as e:
+            error_msg = "Can't create User: {}".format(e)
+    return jsonify({'error': error_msg}), 400
+
+
+@app_views.route('/users/<user_id>', methods=['PUT'], strict_slashes=False)
+def update_user(user_id: str = None) -> str:
+    """ PUT /api/v1/users/:id
+    Path parameter:
+      - User ID
+    JSON body:
+      - last_name (optional)
+      - first_name (optional)
+    Return:
+      - User object JSON represented
+      - 404 if the User ID doesn't exist
+      - 400 if can't update the User
+    """
+    if user_id is None:
+        abort(404)
+    user = User.get(user_id)
+    if user is None:
+        abort(404)
+    rj = None
+    try:
+        rj = request.get_json()
+    except Exception as e:
+        rj = None
+    if rj is None:
+        return jsonify({'error': "Wrong format"}), 400
+    if rj.get('first_name') is not None:
+        user.first_name = rj.get('first_name')
+    if rj.get('last_name') is not None:
+        user.last_name = rj.get('last_name')
+    user.save()
+    return jsonify(user.to_json()), 200
